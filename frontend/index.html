@@ -1,0 +1,137 @@
+<!DOCTYPE html>
+<html lang="es">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>Convertir a PDF</title>
+  <style>
+    :root { --bg:#fafafa; --text:#1a1a1a; --accent:#2563eb; --border:#e5e7eb; --error:#dc2626; }
+    * { box-sizing:border-box; margin:0; padding:0; }
+    body { font-family:system-ui,-apple-system,sans-serif; background:var(--bg); color:var(--text); line-height:1.5; display:flex; justify-content:center; align-items:center; min-height:100vh; padding:2rem; }
+    .container { width:100%; max-width:480px; text-align:center; }
+    h1 { font-weight:500; font-size:1.5rem; margin-bottom:.5rem; letter-spacing:-.02em; }
+    p.subtitle { color:#6b7280; margin-bottom:2rem; font-size:.95rem; }
+
+    .dropzone { border:2px dashed var(--border); border-radius:12px; padding:2rem; cursor:pointer; transition:.2s; background:#fff; }
+    .dropzone:hover, .dropzone.dragover { border-color:var(--accent); background:#f8fafc; }
+    .dropzone p { color:#6b7280; margin-bottom:.5rem; }
+    input[type="file"] { display:none; }
+
+    .btn { background:var(--accent); color:white; border:none; padding:.75rem 1.5rem; border-radius:8px; font-size:.95rem; cursor:pointer; margin-top:1rem; transition:.2s; display:inline-flex; align-items:center; gap:.5rem; }
+    .btn:hover { opacity:.9; }
+    .btn:disabled { background:#9ca3af; cursor:not-allowed; }
+
+    #status { margin-top:1rem; font-size:.85rem; color:#6b7280; min-height:1.2rem; }
+    .error { color:var(--error); }
+
+    .spinner { width:20px; height:20px; border:2px solid #e5e7eb; border-top-color:var(--accent); border-radius:50%; animation:spin 1s linear infinite; margin:0 auto; display:none; }
+    .spinner.active { display:block; }
+    @keyframes spin { to { transform:rotate(360deg); } }
+
+    .badge { display:inline-block; padding:.25rem .5rem; background:#f1f5f9; border-radius:999px; font-size:.75rem; color:#64748b; margin-top:.5rem; }
+  </style>
+</head>
+<body>
+  <div class="container">
+    <h1>Archivos a PDF</h1>
+    <p class="subtitle">Conversión local + backend seguro. Tus archivos nunca se almacenan.</p>
+
+    <label class="dropzone" id="dropzone">
+      <p>📎 Arrastra un archivo aquí o haz clic</p>
+      <small>JPG, PNG, TXT, HTML, MD, DOCX, XLSX, PPTX, ODT</small>
+      <input type="file" id="fileInput" accept=".jpg,.jpeg,.png,.txt,.html,.md,.docx,.xlsx,.pptx,.odt,.ods,.odp,.rtf">
+    </label>
+
+    <button class="btn" id="convertBtn" disabled>
+      <span class="spinner" id="spinner"></span>
+      <span id="btnText">Convertir a PDF</span>
+    </button>
+
+    <div id="status"></div>
+    <div class="badge">Máx. 50 MB • Procesamiento local cuando es posible</div>
+  </div>
+
+  <script src="https://unpkg.com/pdf-lib@1.17.1/dist/pdf-lib.min.js"></script>
+  <script src="https://unpkg.com/html2canvas@1.4.1/dist/html2canvas.min.js"></script>
+  <script src="https://unpkg.com/marked/marked.min.js"></script>
+
+  <script>
+    const BACKEND_URL = "http://localhost:8000";
+    const OFFICE_EXTS = new Set(["docx","xlsx","pptx","odt","ods","odp","rtf"]);
+    const LOCAL_EXTS = new Set(["jpg","jpeg","png","txt","html","md"]);
+    const MAX_SIZE = 50 * 1024 * 1024;
+
+    const dropzone = document.getElementById('dropzone');
+    const fileInput = document.getElementById('fileInput');
+    const convertBtn = document.getElementById('convertBtn');
+    const spinner = document.getElementById('spinner');
+    const btnText = document.getElementById('btnText');
+    const status = document.getElementById('status');
+    let selectedFile = null;
+
+    const prevent = e => { e.preventDefault(); e.stopPropagation(); };
+    dropzone.addEventListener('dragover', e => { prevent(e); dropzone.classList.add('dragover'); });
+    dropzone.addEventListener('dragleave', () => dropzone.classList.remove('dragover'));
+    dropzone.addEventListener('drop', e => { prevent(e); dropzone.classList.remove('dragover'); if(e.dataTransfer.files.length) handleFile(e.dataTransfer.files[0]); });
+    dropzone.addEventListener('click', () => fileInput.click());
+    fileInput.addEventListener('change', () => { if(fileInput.files.length) handleFile(fileInput.files[0]); });
+
+    function handleFile(file) {
+      const ext = file.name.split('.').pop().toLowerCase();
+      if (file.size > MAX_SIZE) { setStatus(`❌ Archivo muy grande (máx. 50 MB)`, true); resetSelection(); return; }
+      if (!OFFICE_EXTS.has(ext) && !LOCAL_EXTS.has(ext)) { setStatus(` Formato '.${ext}' no soportado`, true); resetSelection(); return; }
+      selectedFile = file; convertBtn.disabled = false; setStatus(`✅ Listo: ${file.name} (${formatBytes(file.size)})`);
+    }
+
+    function resetSelection() { selectedFile = null; fileInput.value = ''; convertBtn.disabled = true; }
+    function setStatus(msg, isError = false) { status.textContent = msg; status.className = isError ? 'error' : ''; }
+    function setLoading(loading) { spinner.classList.toggle('active', loading); btnText.textContent = loading ? 'Procesando...' : 'Convertir a PDF'; convertBtn.disabled = loading; }
+
+    convertBtn.addEventListener('click', async () => {
+      if(!selectedFile) return; setLoading(true); setStatus('Iniciando conversión...');
+      const ext = selectedFile.name.split('.').pop().toLowerCase();
+      try {
+        if (OFFICE_EXTS.has(ext)) {
+          const formData = new FormData(); formData.append('file', selectedFile);
+          const res = await fetch(`${BACKEND_URL}/convert`, { method:'POST', body:formData, headers:{'Accept':'application/pdf'} });
+          if(!res.ok) throw new Error(await res.text() || `Error ${res.status}`);
+          downloadBlob(await res.blob(), selectedFile.name.replace(/\.[^.]+$/, '.pdf'));
+          setStatus('✅ Descarga iniciada (backend)');
+        } else { await convertLocal(selectedFile, ext); setStatus('✅ Descarga iniciada (local)'); }
+      } catch(err) { console.error(err); setStatus(`❌ ${err.message || 'Error desconocido'}`, true); }
+      finally { setLoading(false); }
+    });
+
+    function downloadBlob(blob, name) { const url = URL.createObjectURL(blob); const a = document.createElement('a'); a.href = url; a.download = name; document.body.appendChild(a); a.click(); document.body.removeChild(a); URL.revokeObjectURL(url); }
+    function formatBytes(bytes) { if(bytes < 1024) return bytes + ' B'; if(bytes < 1024*1024) return (bytes/1024).toFixed(1) + ' KB'; return (bytes/(1024*1024)).toFixed(1) + ' MB'; }
+
+    async function convertLocal(file, ext) {
+      const { PDFDocument } = PDFLib;
+      const pdfDoc = await PDFDocument.create();
+      const page = pdfDoc.addPage([595, 842]);
+      const { width, height } = page.getSize();
+
+      if (['jpg','jpeg','png'].includes(ext)) {
+        const bytes = new Uint8Array(await file.arrayBuffer());
+        const img = ext === 'png' ? await pdfDoc.embedPng(bytes) : await pdfDoc.embedJpg(bytes);
+        const scale = Math.min(width/img.width, height/img.height) * 0.9;
+        page.drawImage(img, { x:(width-img.width*scale)/2, y:(height-img.height*scale)/2, width:img.width*scale, height:img.height*scale });
+      } else {
+        const div = Object.assign(document.createElement('div'), { style:'position:fixed;left:-9999px;background:#fff;padding:2rem;font:12pt/1.5 system-ui,sans-serif;max-width:800px;white-space:pre-wrap;overflow:hidden;line-height:1.6;' });
+        const text = await file.text();
+        if (ext === 'md') div.innerHTML = marked.parse(text);
+        else if (ext === 'html') div.innerHTML = text;
+        else div.textContent = text;
+        document.body.appendChild(div);
+        const canvas = await html2canvas(div, { scale:2, backgroundColor:'#ffffff', useCORS:true });
+        document.body.removeChild(div);
+        const imgBytes = new Uint8Array(await fetch(canvas.toDataURL('image/png')).then(r => r.arrayBuffer()));
+        const img = await pdfDoc.embedPng(imgBytes);
+        const imgScale = Math.min(width/canvas.width, height/canvas.height);
+        page.drawImage(img, { x:0, y:height-canvas.height*imgScale, width:canvas.width*imgScale, height:canvas.height*imgScale });
+      }
+      downloadBlob(new Blob([await pdfDoc.save()], {type:'application/pdf'}), file.name.replace(/\.[^.]+$/, '.pdf'));
+    }
+  </script>
+</body>
+</html>
