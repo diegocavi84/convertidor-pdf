@@ -18,8 +18,8 @@ app = FastAPI(title="Conversor Office a PDF", version="1.0.0")
 frontend_url = os.getenv("FRONTEND_URL", "http://localhost:3000")
 app.add_middleware(
     CORSMiddleware,
-    allow_origins=[frontend_url, "http://localhost:8000", "http://127.0.0.1:8000"],
-    allow_methods=["POST", "GET"],
+    allow_origins=["*"],  # ← Permite TODOS los orígenes durante desarrollo
+    allow_methods=["POST", "GET", "OPTIONS"],
     allow_headers=["*"],
 )
 @app.get("/")
